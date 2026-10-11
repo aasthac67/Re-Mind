@@ -24,59 +24,18 @@ import {
   Tag,
   X,
 } from "lucide-react";
+import { initialTasks, projects, type Project, type Task, type TaskStatus } from "@/lib/workspace";
 
 type Hub = "context" | "action";
-type TaskStatus = "suggested" | "in-progress" | "blocked" | "done";
 
-type Task = {
-  id: number;
-  title: string;
-  project: string;
-  source?: string;
-  status: TaskStatus;
-  due?: string;
-  priority?: "High" | "Medium";
-};
+type ContextProjectOption = { id: string; name: string };
+type AgentSuggestion = { matchedProjectId: string; confidence: number; reason: string; suggestedPrompt: string };
 
 const categories = [
   { label: "Trips & Hobbies", count: 1, color: "#f4a07a" },
   { label: "Health & Workouts", count: 0, color: "#c9e8c4" },
   { label: "Work & Learning", count: 1, color: "#aebce9" },
   { label: "Personal / Admin", count: 0, color: "#ead58c" },
-];
-
-const projects = [
-  {
-    id: "seattle",
-    category: "Trips & Hobbies",
-    name: "Seattle Trip",
-    kicker: "Updated 12 min ago",
-    sources: 3,
-    open: 2,
-    summary: "Four days of nature, one day trip, and a rental decision still open.",
-    decisions: ["Itinerary drafted", "Car only for the day trip"],
-    next: "Compare rental pickup dates",
-    tone: "orange",
-  },
-  {
-    id: "auth",
-    category: "Work & Learning",
-    name: "Auth Project",
-    kicker: "Updated yesterday",
-    sources: 1,
-    open: 1,
-    summary: "Login endpoint is shipped; refresh-token coverage is the loose end.",
-    decisions: ["Access token flow is live"],
-    next: "Add expired-token test coverage",
-    tone: "blue",
-  },
-];
-
-const initialTasks: Task[] = [
-  { id: 1, title: "Compare / book Seattle rental car", project: "Seattle Trip", source: "Dial capture", status: "suggested", due: "Next week", priority: "High" },
-  { id: 2, title: "Confirm day-trip route", project: "Seattle Trip", source: "Travel chat · 2 sources", status: "in-progress", due: "Nov 18", priority: "Medium" },
-  { id: 3, title: "Add expired-token test coverage", project: "Auth Project", source: "Codex session", status: "blocked", due: "Today", priority: "High" },
-  { id: 4, title: "Outline weekend photo walk", project: "Personal", source: "Manual note", status: "done" },
 ];
 
 const statusMeta: Record<TaskStatus, { label: string; color: string }> = {
@@ -94,6 +53,13 @@ export default function Home() {
   const [showAdd, setShowAdd] = useState(false);
   const [newTask, setNewTask] = useState("");
   const [toast, setToast] = useState("");
+  const [promptTask, setPromptTask] = useState<Task | null>(null);
+  const [agentPrompt, setAgentPrompt] = useState("");
+  const [agentSuggestion, setAgentSuggestion] = useState<AgentSuggestion | null>(null);
+  const [contextProjects, setContextProjects] = useState<ContextProjectOption[]>([]);
+  const [selectedMatchId, setSelectedMatchId] = useState("");
+  const [promptError, setPromptError] = useState("");
+  const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
 
   const selected = projects.find((project) => project.id === selectedProject) ?? projects[0];
   const visibleTasks = useMemo(() => {
@@ -125,6 +91,39 @@ export default function Home() {
     navigator.clipboard?.writeText(context);
     setToast("Context brief copied");
     window.setTimeout(() => setToast(""), 2500);
+  }
+
+  function copyPrompt(prompt: string) {
+    navigator.clipboard?.writeText(prompt);
+    setToast("Agent prompt copied");
+    window.setTimeout(() => setToast(""), 2500);
+  }
+
+  async function generatePrompt(task: Task, selectedProjectId?: string) {
+    setPromptTask(task);
+    setAgentPrompt("");
+    setAgentSuggestion(null);
+    if (!selectedProjectId) setContextProjects([]);
+    setPromptError("");
+    setIsGeneratingPrompt(true);
+
+    try {
+      const response = await fetch("/api/agent-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task, selectedProjectId }),
+      });
+      const result = await response.json() as { suggestion?: AgentSuggestion; projects?: ContextProjectOption[]; error?: string };
+      if (!response.ok || !result.suggestion) throw new Error(result.error ?? "Could not generate a handoff prompt.");
+      setAgentSuggestion(result.suggestion);
+      setAgentPrompt(result.suggestion.suggestedPrompt);
+      setContextProjects(result.projects ?? []);
+      setSelectedMatchId(result.suggestion.matchedProjectId === "unassigned" ? "" : result.suggestion.matchedProjectId);
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : "Could not generate a handoff prompt.");
+    } finally {
+      setIsGeneratingPrompt(false);
+    }
   }
 
   return (
@@ -160,12 +159,13 @@ export default function Home() {
 
             <div className="mt-9 flex items-center justify-between border-b border-[var(--line)]"><div className="flex gap-6"><HubTab active={hub === "context"} onClick={() => setHub("context")} label="Context Hub" caption="Where did I leave off?" /><HubTab active={hub === "action"} onClick={() => setHub("action")} label="Action Hub" caption="What should I do next?" /></div><div className="hidden items-center gap-2 pb-3 text-[11px] text-moss sm:flex"><span className="h-2 w-2 rounded-full bg-[#74aa7e]" /> Synced just now</div></div>
 
-            {hub === "context" ? <ContextView selected={selected} selectedProject={selectedProject} setSelectedProject={setSelectedProject} onCopy={copyContext} /> : <ActionView tasks={visibleTasks} onCycle={cycleTask} onAdd={() => setShowAdd(true)} />}
+            {hub === "context" ? <ContextView selected={selected} selectedProject={selectedProject} setSelectedProject={setSelectedProject} onCopy={copyContext} /> : <ActionView tasks={visibleTasks} onCycle={cycleTask} onAdd={() => setShowAdd(true)} onContinue={generatePrompt} />}
           </div>
         </section>
       </div>
 
       {showAdd && <div className="fixed inset-0 z-20 flex items-center justify-center bg-ink/25 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between"><div><div className="text-[10px] font-bold uppercase tracking-[0.2em] text-moss">Manual capture</div><h2 className="serif mt-2 text-3xl">What needs doing?</h2></div><button onClick={() => setShowAdd(false)} className="rounded-full p-2 text-moss hover:bg-paper"><X size={18} /></button></div><input autoFocus value={newTask} onChange={(event) => setNewTask(event.target.value)} onKeyDown={(event) => event.key === "Enter" && addTask()} placeholder="e.g. Send itinerary to Maya" className="mt-6 h-12 w-full rounded-xl border border-[var(--line)] bg-paper px-4 text-sm outline-none focus:border-moss" /><div className="mt-5 flex justify-end gap-2"><button onClick={() => setShowAdd(false)} className="rounded-xl px-4 py-2 text-xs font-bold text-moss">Cancel</button><button onClick={addTask} className="rounded-xl bg-ink px-4 py-2 text-xs font-bold text-white">Add to Action Hub</button></div></div></div>}
+      {promptTask && <AgentPromptModal task={promptTask} prompt={agentPrompt} suggestion={agentSuggestion} projects={contextProjects} selectedProjectId={selectedMatchId} error={promptError} loading={isGeneratingPrompt} onChooseProject={setSelectedMatchId} onRegenerate={() => generatePrompt(promptTask, selectedMatchId)} onClose={() => setPromptTask(null)} onCopy={copyPrompt} />}
       {toast && <div className="fixed bottom-5 left-1/2 z-30 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-xs font-semibold text-white shadow-lg">{toast}</div>}
     </main>
   );
@@ -179,20 +179,28 @@ function HubTab({ active, onClick, label, caption }: { active: boolean; onClick:
   return <button onClick={onClick} className={`relative pb-3 text-left transition ${active ? "text-ink" : "text-moss/50 hover:text-moss"}`}><div className="text-sm font-bold">{label}</div><div className="mt-1 text-[10px]">{caption}</div>{active && <span className="absolute -bottom-px left-0 right-0 h-0.5 rounded-full bg-ink" />}</button>;
 }
 
-function ContextView({ selected, selectedProject, setSelectedProject, onCopy }: { selected: (typeof projects)[number]; selectedProject: string; setSelectedProject: (id: string) => void; onCopy: () => void }) {
+function ContextView({ selected, selectedProject, setSelectedProject, onCopy }: { selected: Project; selectedProject: string; setSelectedProject: (id: string) => void; onCopy: () => void }) {
   return <div className="mt-7 grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,.65fr)]"><div><div className="mb-3 flex items-center justify-between"><h2 className="text-xs font-bold uppercase tracking-[0.18em] text-moss">Living project threads <span className="ml-1 text-moss/40">2</span></h2><button className="flex items-center gap-1 text-[11px] font-bold text-moss"><Filter size={13} /> Filter</button></div><div className="space-y-3">{projects.map((project) => <ProjectCard key={project.id} project={project} active={selectedProject === project.id} onClick={() => setSelectedProject(project.id)} />)}</div><button className="dashed mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-[var(--line)] bg-white/40 py-4 text-xs font-bold text-moss hover:bg-white"><Plus size={15} /> Import another conversation</button></div><div className="rounded-3xl border border-[var(--line)] bg-white/75 p-5"><div className="flex items-center justify-between"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-moss"><span className="h-2 w-2 rounded-full bg-[#7eae84]" /> Context brief</div><button onClick={onCopy} className="rounded-lg p-1.5 text-moss hover:bg-paper" title="Copy context"><Copy size={15} /></button></div><h2 className="serif mt-4 text-3xl leading-none">{selected.name}</h2><p className="mt-3 text-sm leading-relaxed text-moss">{selected.summary}</p><div className="mt-5 border-t border-[var(--line)] pt-4"><div className="text-[10px] font-bold uppercase tracking-[0.16em] text-moss/60">Decisions kept</div><ul className="mt-3 space-y-2">{selected.decisions.map((decision) => <li key={decision} className="flex gap-2 text-xs"><Check size={14} className="mt-0.5 shrink-0 text-[#5e9b6c]" />{decision}</li>)}</ul></div><div className="mt-5 rounded-2xl bg-[#edf5e9] p-3.5"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.15em] text-[#54845e]"><Sparkles size={13} /> Next action</div><div className="mt-2 text-sm font-bold">{selected.next}</div><button className="mt-3 flex items-center gap-1 text-[11px] font-bold text-[#54845e]">Open in Action Hub <ArrowUpRight size={12} /></button></div><div className="mt-5 flex items-center justify-between text-[10px] text-moss/65"><span className="flex items-center gap-1"><Link2 size={12} /> {selected.sources} linked sources</span><button className="font-bold text-moss">View timeline</button></div></div></div>;
 }
 
-function ProjectCard({ project, active, onClick }: { project: (typeof projects)[number]; active: boolean; onClick: () => void }) {
+function ProjectCard({ project, active, onClick }: { project: Project; active: boolean; onClick: () => void }) {
   const orange = project.tone === "orange";
   return <button onClick={onClick} className={`w-full rounded-3xl border p-5 text-left transition ${active ? "border-ink/20 bg-white shadow-soft" : "border-[var(--line)] bg-white/55 hover:border-moss/40 hover:bg-white"}`}><div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-moss"><span className={`h-2.5 w-2.5 rounded-full ${orange ? "bg-coral" : "bg-[#9bb0e6]"}`} />{project.category}</div><MoreHorizontal size={17} className="text-moss/45" /></div><div className="mt-3 flex items-end justify-between gap-4"><div><h3 className="serif text-[27px] leading-none">{project.name}</h3><p className="mt-2 text-[11px] text-moss/65">{project.kicker}</p></div><div className="flex shrink-0 gap-1.5 text-[10px] text-moss"><span className="rounded-full bg-paper px-2 py-1">{project.sources} sources</span><span className="rounded-full bg-paper px-2 py-1">{project.open} open</span></div></div><p className="mt-4 max-w-[500px] text-xs leading-relaxed text-moss">{project.summary}</p><div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3"><span className="flex items-center gap-1.5 text-[11px] font-semibold"><ArrowUpRight size={14} className="text-moss" /> Next: {project.next}</span><span className="flex items-center gap-1 text-[10px] font-bold text-moss"><FileText size={12} /> Sources</span></div></button>;
 }
 
-function ActionView({ tasks, onCycle, onAdd }: { tasks: Task[]; onCycle: (id: number) => void; onAdd: () => void }) {
+function ActionView({ tasks, onCycle, onAdd, onContinue }: { tasks: Task[]; onCycle: (id: number) => void; onAdd: () => void; onContinue: (task: Task) => void }) {
   const statuses: TaskStatus[] = ["suggested", "in-progress", "blocked", "done"];
-  return <div className="mt-7"><div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="serif text-3xl">Your next few moves</h2><p className="mt-1 text-xs text-moss">Every task keeps its source, project, and explicit status.</p></div><div className="flex gap-2"><button className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2 text-[11px] font-bold text-moss"><Filter size={13} /> Filter</button><button onClick={onAdd} className="flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-[11px] font-bold text-white"><Plus size={14} /> Add task</button></div></div><div className="mt-6 grid gap-3 lg:grid-cols-4">{statuses.map((status) => <div key={status} className="min-h-[270px] rounded-2xl border border-[var(--line)] bg-white/45 p-3"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.13em] text-moss"><span className="h-2 w-2 rounded-full" style={{ background: statusMeta[status].color }} />{statusMeta[status].label}</div><span className="text-[10px] text-moss/50">{tasks.filter((task) => task.status === status).length}</span></div><div className="space-y-2">{tasks.filter((task) => task.status === status).map((task) => <TaskCard key={task.id} task={task} onCycle={() => onCycle(task.id)} />)}</div>{status === "suggested" && <button onClick={onAdd} className="mt-3 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-[var(--line)] py-2 text-[10px] font-bold text-moss/65 hover:bg-white"><Plus size={12} /> Add task</button>}</div>)}</div><div className="mt-5 flex items-center gap-3 rounded-2xl border border-[#e4d8af] bg-[#fff8dc] px-4 py-3 text-xs text-[#786b36]"><Sparkles size={15} /><span><strong>1 possible duplicate</strong> found in your imported conversations.</span><button className="ml-auto font-bold underline">Review merge</button></div></div>;
+  return <div className="mt-7"><div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="serif text-3xl">Your next few moves</h2><p className="mt-1 text-xs text-moss">Every task keeps its source, project, and explicit status.</p></div><div className="flex gap-2"><button className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2 text-[11px] font-bold text-moss"><Filter size={13} /> Filter</button><button onClick={onAdd} className="flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-[11px] font-bold text-white"><Plus size={14} /> Add task</button></div></div><div className="mt-6 grid gap-3 lg:grid-cols-4">{statuses.map((status) => <div key={status} className="min-h-[270px] rounded-2xl border border-[var(--line)] bg-white/45 p-3"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.13em] text-moss"><span className="h-2 w-2 rounded-full" style={{ background: statusMeta[status].color }} />{statusMeta[status].label}</div><span className="text-[10px] text-moss/50">{tasks.filter((task) => task.status === status).length}</span></div><div className="space-y-2">{tasks.filter((task) => task.status === status).map((task) => <TaskCard key={task.id} task={task} onCycle={() => onCycle(task.id)} onContinue={() => onContinue(task)} />)}</div>{status === "suggested" && <button onClick={onAdd} className="mt-3 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-[var(--line)] py-2 text-[10px] font-bold text-moss/65 hover:bg-white"><Plus size={12} /> Add task</button>}</div>)}</div><div className="mt-5 flex items-center gap-3 rounded-2xl border border-[#e4d8af] bg-[#fff8dc] px-4 py-3 text-xs text-[#786b36]"><Sparkles size={15} /><span><strong>1 possible duplicate</strong> found in your imported conversations.</span><button className="ml-auto font-bold underline">Review merge</button></div></div>;
 }
 
-function TaskCard({ task, onCycle }: { task: Task; onCycle: () => void }) {
-  return <div className="rounded-2xl border border-[var(--line)] bg-white p-3 shadow-sm"><div className="flex items-start gap-2"><button onClick={onCycle} className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${task.status === "done" ? "border-[#75aa80] bg-[#75aa80] text-white" : "border-moss/35 text-transparent hover:border-moss"}`}>{task.status === "done" ? <Check size={10} /> : <Circle size={8} fill="currentColor" />}</button><div className={`text-xs font-semibold leading-relaxed ${task.status === "done" ? "text-moss/45 line-through" : ""}`}>{task.title}</div></div><div className="mt-3 flex flex-wrap items-center gap-1.5 pl-6"><span className="rounded bg-[#edf5e9] px-1.5 py-1 text-[9px] font-bold text-[#54845e]">{task.project}</span>{task.priority && <span className={`rounded px-1.5 py-1 text-[9px] font-bold ${task.priority === "High" ? "bg-[#fff0ea] text-[#b7684d]" : "bg-paper text-moss"}`}>{task.priority}</span>}</div><div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2 pl-6 text-[9px] text-moss/60"><span className="flex items-center gap-1">{task.source === "Dial capture" ? <Phone size={10} /> : <MessageCircle size={10} />}{task.source}</span>{task.due && <span className="flex items-center gap-1"><Clock3 size={10} />{task.due}</span>}</div></div>;
+function TaskCard({ task, onCycle, onContinue }: { task: Task; onCycle: () => void; onContinue: () => void }) {
+  const project = projects.find((item) => item.name === task.project);
+  const timelineCount = project?.timeline?.length ?? 0;
+  return <div className="rounded-2xl border border-[var(--line)] bg-white p-3 shadow-sm"><div className="flex items-start gap-2"><button onClick={onCycle} className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${task.status === "done" ? "border-[#75aa80] bg-[#75aa80] text-white" : "border-moss/35 text-transparent hover:border-moss"}`}>{task.status === "done" ? <Check size={10} /> : <Circle size={8} fill="currentColor" />}</button><div className={`text-xs font-semibold leading-relaxed ${task.status === "done" ? "text-moss/45 line-through" : ""}`}>{task.title}</div></div><div className="mt-3 flex flex-wrap items-center gap-1.5 pl-6"><span className="rounded bg-[#edf5e9] px-1.5 py-1 text-[9px] font-bold text-[#54845e]">{task.project}</span>{task.priority && <span className={`rounded px-1.5 py-1 text-[9px] font-bold ${task.priority === "High" ? "bg-[#fff0ea] text-[#b7684d]" : "bg-paper text-moss"}`}>{task.priority}</span>}{timelineCount > 0 && <span className="rounded bg-[#eef1fb] px-1.5 py-1 text-[9px] font-bold text-[#6274aa]">{timelineCount} timeline events</span>}</div><div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2 pl-6 text-[9px] text-moss/60"><span className="flex items-center gap-1">{task.source === "Dial capture" ? <Phone size={10} /> : <MessageCircle size={10} />}{task.source}</span>{task.due && <span className="flex items-center gap-1"><Clock3 size={10} />{task.due}</span>}</div><button onClick={onContinue} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#edf5e9] px-2 py-2 text-[10px] font-bold text-[#54845e] transition hover:bg-[#dcecd7]"><Sparkles size={12} /> Ask Re:Mind for prompt</button></div>;
+}
+
+function AgentPromptModal({ task, prompt, suggestion, projects: projectOptions, selectedProjectId, error, loading, onChooseProject, onRegenerate, onClose, onCopy }: { task: Task; prompt: string; suggestion: AgentSuggestion | null; projects: ContextProjectOption[]; selectedProjectId: string; error: string; loading: boolean; onChooseProject: (id: string) => void; onRegenerate: () => void; onClose: () => void; onCopy: (prompt: string) => void }) {
+  const matchedProject = projectOptions.find((project) => project.id === suggestion?.matchedProjectId);
+  const confidence = suggestion ? `${Math.round(suggestion.confidence * 100)}% confidence` : "";
+  return <div className="fixed inset-0 z-20 flex items-center justify-center bg-ink/30 p-4 backdrop-blur-sm"><div className="w-full max-w-2xl rounded-3xl bg-white p-5 shadow-2xl sm:p-6"><div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#54845e]"><Sparkles size={13} /> Agent-ready handoff</div><h2 className="serif mt-2 text-3xl leading-none">Continue this task anywhere</h2><p className="mt-2 text-xs leading-relaxed text-moss">Re:Mind fetched the latest Context Hub snapshot and asked Codex to find the best context.</p></div><button onClick={onClose} className="rounded-full p-2 text-moss hover:bg-paper" aria-label="Close prompt"><X size={18} /></button></div>{loading && <div className="mt-5 flex min-h-40 items-center justify-center rounded-2xl border border-[var(--line)] bg-paper text-xs font-semibold text-moss"><Sparkles size={15} className="mr-2 animate-pulse" /> Reading context and preparing your handoff…</div>}{error && <div className="mt-5 rounded-2xl border border-[#f2c7b8] bg-[#fff2ed] p-4 text-xs leading-relaxed text-[#a5553d]">{error}</div>}{suggestion && <><div className="mt-5 rounded-2xl border border-[#d8ead5] bg-[#f2f9ef] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#54845e]">Suggested context</div><span className="rounded-full bg-white px-2 py-1 text-[10px] font-bold text-[#54845e]">{confidence}</span></div><div className="mt-2 text-sm font-bold">{matchedProject?.name ?? "No confident project match"}</div><p className="mt-1 text-xs leading-relaxed text-[#54845e]">{suggestion.reason}</p><div className="mt-4 flex flex-wrap items-center gap-2"><label className="text-[10px] font-bold uppercase tracking-[0.13em] text-moss">Correct it</label><select value={selectedProjectId} onChange={(event) => onChooseProject(event.target.value)} className="h-8 rounded-lg border border-[#c9dfc5] bg-white px-2 text-xs text-ink outline-none focus:border-moss"><option value="">Choose a Context Hub project</option>{projectOptions.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select><button onClick={onRegenerate} disabled={!selectedProjectId} className="rounded-lg border border-[#c9dfc5] bg-white px-3 py-1.5 text-[10px] font-bold text-[#54845e] disabled:cursor-not-allowed disabled:opacity-45">Use selected context</button></div></div><pre className="mt-4 max-h-[300px] overflow-auto whitespace-pre-wrap rounded-2xl border border-[var(--line)] bg-paper p-4 font-sans text-xs leading-relaxed text-ink">{prompt}</pre></>}<div className="mt-5 flex flex-wrap items-center justify-between gap-3"><span className="text-[10px] text-moss/65">Only the generated handoff is copied; original sources stay in Context Hub.</span><div className="flex gap-2"><button onClick={onClose} className="rounded-xl px-4 py-2 text-xs font-bold text-moss">Close</button>{prompt && <button onClick={() => onCopy(prompt)} className="flex items-center gap-2 rounded-xl bg-ink px-4 py-2 text-xs font-bold text-white"><Copy size={14} /> Copy prompt</button>}</div></div></div></div>;
 }
