@@ -5,6 +5,13 @@ const {parseEnv}=require('node:util');
 const config=parseEnv(fs.readFileSync(root+'/.env.local','utf8'));
 const {configure}=require('./setup-dial.cjs');
 async function main(){
+ const accessCode=ts.transpileModule(fs.readFileSync(root+'/lib/local-access.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+ const accessExports={};new Function('exports',accessCode)(accessExports);
+ for(const host of ['127.0.0.1:3000','localhost:3000']){
+   assert.equal(accessExports.localRequest(new Request('http://localhost:3000/api/tasks',{headers:{host,origin:'http://'+host}})),true);
+ }
+ assert.equal(accessExports.localRequest(new Request('http://localhost:3000/api/tasks',{headers:{host:'127.0.0.1:3000',origin:'https://other.example'}})),false);
+ console.log('PASS: browser Host origin accepted even when Next.js normalizes request URL; foreign origin rejected');
  const scratch=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'remind-store-check-'));
  for(const name of ['workspace','demo-data','task-store']){const code=ts.transpileModule(fs.readFileSync(root+'/lib/'+name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;fs.writeFileSync(scratch+'/'+name+'.js',code);}
  const setupDir=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'remind-setup-check-')); configure(setupDir,'+14155550123'); const before=fs.readFileSync(setupDir+'/.env.local','utf8'); configure(setupDir,'+14155550999'); assert.equal(fs.readFileSync(setupDir+'/.env.local','utf8'),before); assert.throws(()=>configure(setupDir,'bad')); console.log('PASS: repeated setup preserves existing settings; invalid caller rejected');

@@ -1,8 +1,15 @@
 export function localRequest(req: Request) {
-  const host = req.headers.get("host")?.split(":")[0];
-  if (host !== "127.0.0.1" && host !== "localhost") return false;
+  const authority = req.headers.get("host");
+  if (!authority) return false;
+  let hostUrl: URL;
+  try { hostUrl = new URL(`http://${authority}`); } catch { return false; }
+  if (hostUrl.hostname !== "127.0.0.1" && hostUrl.hostname !== "localhost") return false;
   const forwarded = req.headers.get("x-forwarded-host");
-  if (forwarded && forwarded !== req.headers.get("host")) return false;
+  if (forwarded && forwarded !== authority) return false;
   const origin = req.headers.get("origin");
-  return !origin || origin === new URL(req.url).origin;
+  if (!origin) return true;
+  try {
+    const browserOrigin = new URL(origin);
+    return browserOrigin.host === authority && browserOrigin.protocol === new URL(req.url).protocol;
+  } catch { return false; }
 }
