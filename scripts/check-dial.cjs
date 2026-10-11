@@ -6,7 +6,7 @@ const config=parseEnv(fs.readFileSync(root+'/.env.local','utf8'));
 const {configure}=require('./setup-dial.cjs');
 async function main(){
  const scratch=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'remind-store-check-'));
- for(const name of ['demo-data','task-store']){const code=ts.transpileModule(fs.readFileSync(root+'/lib/'+name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;fs.writeFileSync(scratch+'/'+name+'.js',code);}
+ for(const name of ['workspace','demo-data','task-store']){const code=ts.transpileModule(fs.readFileSync(root+'/lib/'+name+'.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;fs.writeFileSync(scratch+'/'+name+'.js',code);}
  const setupDir=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'remind-setup-check-')); configure(setupDir,'+14155550123'); const before=fs.readFileSync(setupDir+'/.env.local','utf8'); configure(setupDir,'+14155550999'); assert.equal(fs.readFileSync(setupDir+'/.env.local','utf8'),before); assert.throws(()=>configure(setupDir,'bad')); console.log('PASS: repeated setup preserves existing settings; invalid caller rejected');
  process.chdir(scratch);const store=require(scratch+'/task-store.js');
  const input={title:'Test persisted rental task',project:'Seattle Trip',requestId:'test-1'};
