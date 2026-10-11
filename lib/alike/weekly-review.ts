@@ -58,12 +58,23 @@ function categoryFor(text: string): ReviewCategory {
   return "Work & Learning";
 }
 
-function projectFor(item: Record<string, unknown>, category: ReviewCategory) {
+function projectFor(item: Record<string, unknown>, category: ReviewCategory, title: string) {
   for (const key of ["project_title", "project_name", "project"]) {
     const value = item[key];
     if (typeof value === "string" && value.trim()) return value.trim();
     if (value && typeof value === "object" && typeof (value as { name?: unknown }).name === "string") return (value as { name: string }).name;
   }
+
+  if (category === "Trips & Hobbies") {
+    const tripName = title
+      .replace(/^(plan|book|research|organize|create|find|compare|prepare|review)\s+(?:a |an |the )?/i, "")
+      .replace(/\s+(?:next|this)\s+week\b.*$/i, "")
+      .replace(/\s+(?:focused on|including)\b.*$/i, "")
+      .replace(/[.!?]+$/, "")
+      .trim();
+    if (tripName.length >= 4) return tripName;
+  }
+
   return category === "Work & Learning" ? "Recent work" : category;
 }
 
@@ -83,35 +94,73 @@ function itemText(item: Record<string, unknown>) {
   return "Alike activity needs review";
 }
 
-function itemDetail(item: Record<string, unknown>, kind: ReviewActivity["kind"]) {
+function itemDetail(item: Record<string, unknown>, kind: ReviewActivity["kind"], fallbackDetail?: string) {
   const explicitDetail = typeof item.detail === "string" ? item.detail : typeof item.reason === "string" ? item.reason : "";
-  return explicitDetail || kindLabels[kind];
+  return explicitDetail || fallbackDetail || kindLabels[kind];
+}
+
+function valueAtPath(value: unknown, path: string[]) {
+  return path.reduce<unknown>((current, key) => {
+    if (!current || typeof current !== "object") return undefined;
+    return (current as Record<string, unknown>)[key];
+  }, value);
+}
+
+function isFallbackRecommendation(briefing: AlikeBriefing) {
+  const value = briefing.next_actions;
+  return Boolean(value && typeof value === "object" && (value as { fallback?: unknown }).fallback === true);
+}
+
+function sourceRefFor(item: Record<string, unknown>, briefing: AlikeBriefing) {
+  for (const key of ["urn", "entity_urn"]) {
+    if (typeof item[key] === "string") return item[key] as string;
+  }
+
+  const matchingRecommendation = asItems(briefing.next_actions).find((candidate) => itemText(candidate) === itemText(item));
+  return typeof matchingRecommendation?.entity_urn === "string" ? matchingRecommendation.entity_urn : undefined;
 }
 
 function activitiesFromBriefing(briefing: AlikeBriefing, date: string): ReviewActivity[] {
-  const mapping: Array<[string, ReviewActivity["kind"]]> = [
-    ["next_actions", "next_action"],
-    ["blockers", "blocker"],
-    ["commitments", "commitment"],
-    ["inferred_today", "update"],
+  const mapping: Array<{ path: string[]; kind: ReviewActivity["kind"]; fallbackDetail?: string }> = [
+    { path: ["next_actions"], kind: "next_action" },
+    { path: ["blockers"], kind: "blocker" },
+    { path: ["commitments"], kind: "commitment" },
+    { path: ["inferred_today"], kind: "update" },
+    { path: ["plan", "deterministic_context", "task_graph", "in_progress"], kind: "next_action", fallbackDetail: "In progress" },
+    { path: ["plan", "deterministic_context", "task_graph", "ready_to_start"], kind: "next_action", fallbackDetail: "Ready to start" },
+    { path: ["plan", "deterministic_context", "task_graph", "at_risk"], kind: "blocker", fallbackDetail: "At risk" },
   ];
 
-  return mapping.flatMap(([key, kind]) => asItems(briefing[key]).map((item, index) => {
-    const title = itemText(item);
-    const sourceRef = typeof item.urn === "string" ? item.urn : undefined;
-    const category = categoryFor(`${title} ${itemDetail(item, kind)}`);
-    return {
-      id: `${date}-${key}-${sourceRef ?? index}`,
-      title,
-      detail: itemDetail(item, kind),
-      project: projectFor(item, category),
-      category,
-      kind,
-      occurredOn: date,
-      sourceLabel: `Alike daily briefing · ${date}`,
-      sourceRef,
-    };
-  }));
+  return mapping.flatMap(({ path, kind, fallbackDetail }) => {
+    // Alike may return a most-recent task when it has no genuine ranked signal.
+    // That is a product fallback, not evidence from a conversation, so it must
+    // never be displayed as recovered user context.
+    if (path[0] === "next_actions" && isFallbackRecommendation(briefing)) return [];
+
+    return asItems(valueAtPath(briefing, path)).map((item, index) => {
+      const title = itemText(item);
+      const detail = itemDetail(item, kind, fallbackDetail);
+      const sourceRef = sourceRefFor(item, briefing);
+      const category = categoryFor(`${title} ${detail}`);
+      return {
+        id: `${date}-${path.join("-")}-${sourceRef ?? index}`,
+        title,
+        detail,
+        project: projectFor(item, category, title),
+        category,
+        kind,
+        occurredOn: date,
+        sourceLabel: `Alike daily briefing · ${date}`,
+        sourceRef,
+      };
+    });
+  });
+}
+
+function summaryFromBriefing(briefing: AlikeBriefing) {
+  const planSummary = valueAtPath(briefing, ["plan", "synthesized_context", "summary"]);
+  if (typeof planSummary === "string" && planSummary.trim()) return planSummary;
+  return briefing.ui_briefing_headline?.summary_text ?? briefing.ui_briefing_headline?.headline;
 }
 
 function countsFor(activities: ReviewActivity[]) {
@@ -143,7 +192,7 @@ export async function getWeeklyReview(): Promise<WeeklyReview> {
   const found = responses.filter((response) => response.briefing?.found);
   const activities = found.flatMap(({ date, briefing }) => activitiesFromBriefing(briefing as AlikeBriefing, date));
   const summaries = found
-    .map(({ briefing }) => briefing?.ui_briefing_headline?.summary_text ?? briefing?.ui_briefing_headline?.headline)
+    .map(({ briefing }) => summaryFromBriefing(briefing as AlikeBriefing))
     .filter((summary): summary is string => Boolean(summary));
 
   if (!found.length || !activities.length) return emptyReview(start, end);
