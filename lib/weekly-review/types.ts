@@ -1,4 +1,4 @@
-export type ReviewMode = "live" | "demo";
+export type ReviewMode = "live" | "empty";
 
 export type ReviewCategory = "Work & Learning" | "Personal / Admin" | "Health & Workouts" | "Trips & Hobbies";
 
@@ -6,6 +6,7 @@ export type ReviewActivity = {
   id: string;
   title: string;
   detail: string;
+  project: string;
   category: ReviewCategory;
   kind: "next_action" | "blocker" | "commitment" | "update";
   occurredOn: string;

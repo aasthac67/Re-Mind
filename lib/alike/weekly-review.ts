@@ -58,6 +58,15 @@ function categoryFor(text: string): ReviewCategory {
   return "Work & Learning";
 }
 
+function projectFor(item: Record<string, unknown>, category: ReviewCategory) {
+  for (const key of ["project_title", "project_name", "project"]) {
+    const value = item[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (value && typeof value === "object" && typeof (value as { name?: unknown }).name === "string") return (value as { name: string }).name;
+  }
+  return category === "Work & Learning" ? "Recent work" : category;
+}
+
 function asItems(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
   if (value && typeof value === "object" && Array.isArray((value as { items?: unknown }).items)) {
@@ -90,11 +99,13 @@ function activitiesFromBriefing(briefing: AlikeBriefing, date: string): ReviewAc
   return mapping.flatMap(([key, kind]) => asItems(briefing[key]).map((item, index) => {
     const title = itemText(item);
     const sourceRef = typeof item.urn === "string" ? item.urn : undefined;
+    const category = categoryFor(`${title} ${itemDetail(item, kind)}`);
     return {
       id: `${date}-${key}-${sourceRef ?? index}`,
       title,
       detail: itemDetail(item, kind),
-      category: categoryFor(`${title} ${itemDetail(item, kind)}`),
+      project: projectFor(item, category),
+      category,
       kind,
       occurredOn: date,
       sourceLabel: `Alike daily briefing · ${date}`,
@@ -110,30 +121,24 @@ function countsFor(activities: ReviewActivity[]) {
   }, {} as Record<ReviewCategory, number>);
 }
 
-function demoReview(start: string, end: string): WeeklyReview {
-  const activities: ReviewActivity[] = [
-    { id: "demo-auth", title: "Auth login endpoint moved forward", detail: "A coding-session outcome was captured; token-refresh coverage remains open.", category: "Work & Learning", kind: "update", occurredOn: end, sourceLabel: "Demo Alike briefing" },
-    { id: "demo-coverage", title: "Add expired-token test coverage", detail: "Suggested next action from the Auth Project context.", category: "Work & Learning", kind: "next_action", occurredOn: end, sourceLabel: "Demo Alike briefing" },
-    { id: "demo-blocker", title: "Confirm refresh-token test cases", detail: "Blocked until the expected expiry behaviour is agreed.", category: "Work & Learning", kind: "blocker", occurredOn: end, sourceLabel: "Demo Alike briefing" },
-  ];
-
+function emptyReview(start: string, end: string): WeeklyReview {
   return {
     period: { start, end, label: rangeLabel(start, end) },
     generatedAt: new Date().toISOString(),
-    mode: "demo",
-    connectionMessage: "No completed Alike briefings were available locally, so Re:Mind is showing a clearly labelled demo review.",
-    summary: "Your local Alike connection is ready for a weekly review. When completed daily briefings are available, this panel will replace the demo with source-backed activity from the previous seven days.",
-    activities,
-    suggestedNextActions: activities.filter((activity) => activity.kind === "next_action"),
-    categoryCounts: countsFor(activities),
+    mode: "empty",
+    connectionMessage: "No recent context is available yet.",
+    summary: "Start or continue a coding-agent conversation, then refresh to bring its recent context into Re:Mind.",
+    activities: [],
+    suggestedNextActions: [],
+    categoryCounts: countsFor([]),
     sourceCount: 0,
   };
 }
 
 export async function getWeeklyReview(): Promise<WeeklyReview> {
-  const end = dateKey(1);
-  const start = dateKey(7);
-  const dates = Array.from({ length: 7 }, (_, index) => dateKey(index + 1));
+  const end = dateKey(0);
+  const start = dateKey(6);
+  const dates = Array.from({ length: 7 }, (_, index) => dateKey(index));
   const responses = await Promise.all(dates.map(async (date) => ({ date, briefing: await fetchBriefing(date) })));
   const found = responses.filter((response) => response.briefing?.found);
   const activities = found.flatMap(({ date, briefing }) => activitiesFromBriefing(briefing as AlikeBriefing, date));
@@ -141,7 +146,7 @@ export async function getWeeklyReview(): Promise<WeeklyReview> {
     .map(({ briefing }) => briefing?.ui_briefing_headline?.summary_text ?? briefing?.ui_briefing_headline?.headline)
     .filter((summary): summary is string => Boolean(summary));
 
-  if (!found.length || !activities.length) return demoReview(start, end);
+  if (!found.length || !activities.length) return emptyReview(start, end);
 
   const uniqueActivities = Array.from(new Map(activities.map((activity) => [`${activity.kind}:${activity.title}`, activity])).values()).slice(0, 12);
   const suggestedNextActions = uniqueActivities.filter((activity) => activity.kind === "next_action").slice(0, 3);
