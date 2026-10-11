@@ -44,7 +44,7 @@ const categories = [
 ];
 
 const statusMeta: Record<TaskStatus, { label: string; color: string }> = {
-  suggested: { label: "Suggested", color: "#e6b45f" },
+  suggested: { label: "To-do", color: "#e6b45f" },
   "in-progress": { label: "In progress", color: "#89a8e9" },
   blocked: { label: "Blocked", color: "#e88772" },
   done: { label: "Done", color: "#75aa80" },
@@ -84,15 +84,18 @@ export default function Home() {
     return tasks.filter((task) => `${task.title} ${task.project} ${task.source}`.toLowerCase().includes(term));
   }, [search, tasks]);
 
-  async function cycleTask(id: number) {
-    const order: TaskStatus[] = ['suggested', 'in-progress', 'blocked', 'done'];
-    const task = tasks.find(t => t.id === id); if (!task) return;
-    const status = order[(order.indexOf(task.status) + 1) % order.length];
+  async function moveTask(id: number, status: TaskStatus) {
     try {
       const response = await fetch('/api/tasks', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, status }) });
       if (!response.ok) throw new Error(); const { task: saved } = await response.json();
       setTasks(current => current.map(t => t.id === id ? saved : t));
     } catch { setToast('Task update failed. Please try again.'); }
+  }
+
+  async function cycleTask(id: number) {
+    const order: TaskStatus[] = ['suggested', 'in-progress', 'blocked', 'done'];
+    const task = tasks.find(t => t.id === id); if (!task) return;
+    await moveTask(id, order[(order.indexOf(task.status) + 1) % order.length]);
   }
 
   async function addTask() {
@@ -101,9 +104,10 @@ export default function Home() {
       const response = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTask.trim(), project: selected.name, requestId: crypto.randomUUID() }) });
       if (!response.ok) throw new Error(); const { task } = await response.json();
       setTasks(current => [task, ...current.filter(t => t.id !== task.id)]);
-      setNewTask(''); setShowAdd(false); setToast('Task saved to Suggested');
+      setNewTask(''); setShowAdd(false); setToast('Task saved to To-do');
       window.setTimeout(() => setToast(''), 2500);
     } catch { setToast('Task could not be saved. Please try again.'); }
+
   }
 
   function copyContext() {
@@ -179,7 +183,7 @@ export default function Home() {
 
             <div className="mt-5 flex items-center justify-between gap-3 border-b border-[var(--line)]"><div className="flex min-w-0 gap-4 sm:gap-6"><HubTab active={hub === "context"} onClick={() => setHub("context")} label="Context Hub" caption="Where did I leave off?" /><HubTab active={hub === "action"} onClick={() => setHub("action")} label="Action Hub" caption="What should I do next?" /></div><div className="hidden items-center gap-2 pb-3 text-[11px] text-moss sm:flex"><span className="h-2 w-2 rounded-full bg-[#74aa7e]" /> Tasks refresh every 3s</div></div>
 
-            {hub === "context" ? <ContextView selected={selected} selectedProject={selectedProject} setSelectedProject={setSelectedProject} onCopy={copyContext} /> : <ActionView tasks={visibleTasks} onCycle={cycleTask} onAdd={() => setShowAdd(true)} onContinue={generatePrompt} />}
+            {hub === "context" ? <ContextView selected={selected} selectedProject={selectedProject} setSelectedProject={setSelectedProject} onCopy={copyContext} /> : <ActionView tasks={visibleTasks} onCycle={cycleTask} onMove={moveTask} onAdd={() => setShowAdd(true)} onContinue={generatePrompt} />}
           </div>
         </section>
       </div>
@@ -217,13 +221,16 @@ function ProjectCard({ project, active, onClick }: { project: Project; active: b
   return <button onClick={onClick} className={`w-full rounded-3xl border p-5 text-left transition ${active ? "border-ink/20 bg-white shadow-soft" : "border-[var(--line)] bg-white/55 hover:border-moss/40 hover:bg-white"}`}><div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-moss"><span className={`h-2.5 w-2.5 rounded-full ${orange ? "bg-coral" : "bg-[#9bb0e6]"}`} />{project.category}</div><MoreHorizontal size={17} className="text-moss/45" /></div><div className="mt-3 flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-semibold leading-snug">{project.name}</h3><p className="mt-2 text-[11px] text-moss/65">{project.kicker}</p></div><div className="flex shrink-0 gap-1.5 text-[10px] text-moss"><span className="rounded-full bg-paper px-2 py-1">{project.sources} sources</span><span className="rounded-full bg-paper px-2 py-1">{project.open} open</span></div></div><p className="mt-4 max-w-[500px] text-xs leading-relaxed text-moss">{project.summary}</p><div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3"><span className="flex items-center gap-1.5 text-[11px] font-semibold"><ArrowUpRight size={14} className="text-moss" /> Next: {project.next}</span><span className="flex items-center gap-1 text-[10px] font-bold text-moss"><FileText size={12} /> Sources</span></div></button>;
 }
 
-function ActionView({ tasks, onCycle, onAdd, onContinue }: { tasks: Task[]; onCycle: (id: number) => void; onAdd: () => void; onContinue: (task: Task) => void }) {
+function ActionView({ tasks, onCycle, onMove, onAdd, onContinue }: { tasks: Task[]; onCycle: (id: number) => void; onMove: (id: number, status: TaskStatus) => void; onAdd: () => void; onContinue: (task: Task) => void }) {
   const statuses: TaskStatus[] = ["suggested", "in-progress", "blocked", "done"];
-  return <div className="mt-7"><div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">Your next few moves</h2><p className="mt-1 text-xs text-moss">Every task keeps its source, project, and explicit status.</p></div><div className="flex gap-2"><button className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2 text-[11px] font-bold text-moss"><Filter size={13} /> Filter</button><button onClick={onAdd} className="flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-[11px] font-bold text-white"><Plus size={14} /> Add task</button></div></div><div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">{statuses.map((status) => <div key={status} className="min-w-0 rounded-2xl sm:min-h-[200px] border border-[var(--line)] bg-white/45 p-3"><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.13em] text-moss"><span className="h-2 w-2 rounded-full" style={{ background: statusMeta[status].color }} />{statusMeta[status].label}</div><span className="text-[10px] text-moss/50">{tasks.filter((task) => task.status === status).length}</span></div><div className="space-y-2">{tasks.filter((task) => task.status === status).map((task) => <TaskCard key={task.id} task={task} onCycle={() => onCycle(task.id)} onContinue={() => onContinue(task)} />)}</div>{status === "suggested" && <button onClick={onAdd} className="mt-3 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-[var(--line)] py-2 text-[10px] font-bold text-moss/65 hover:bg-white"><Plus size={12} /> Add task</button>}</div>)}</div><div className="mt-5 flex items-center gap-3 rounded-2xl border border-[#e4d8af] bg-[#fff8dc] px-4 py-3 text-xs text-[#786b36]"><Sparkles size={15} /><span><strong>1 possible duplicate</strong> found in your imported conversations.</span><button className="ml-auto font-bold underline">Review merge</button></div></div>;
+  const [draggingTaskId, setDraggingTaskId] = useState<number | null>(null);
+  const [dropStatus, setDropStatus] = useState<TaskStatus | null>(null);
+  return <div className="mt-7"><div className="flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">Your next few moves</h2><p className="mt-1 text-xs text-moss">Drag a task between columns to update its status.</p></div><div className="flex gap-2"><button className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-white/70 px-3 py-2 text-[11px] font-bold text-moss"><Filter size={13} /> Filter</button><button onClick={onAdd} className="flex items-center gap-2 rounded-xl bg-ink px-3 py-2 text-[11px] font-bold text-white"><Plus size={14} /> Add task</button></div></div><div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-4">{statuses.map((status) => <div key={status} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropStatus(status); }} onDragLeave={() => setDropStatus((current) => current === status ? null : current)} onDrop={(event) => { event.preventDefault(); const id = draggingTaskId ?? Number(event.dataTransfer.getData("text/plain")); if (id) onMove(id, status); setDraggingTaskId(null); setDropStatus(null); }} className={`min-w-0 rounded-2xl sm:min-h-[200px] border p-3 transition ${dropStatus === status ? "border-moss bg-[#edf5e9]" : "border-[var(--line)] bg-white/45"}`}><div className="mb-3 flex items-center justify-between"><div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.13em] text-moss"><span className="h-2 w-2 rounded-full" style={{ background: statusMeta[status].color }} />{statusMeta[status].label}</div><span className="text-[10px] text-moss/50">{tasks.filter((task) => task.status === status).length}</span></div><div className="space-y-2">{tasks.filter((task) => task.status === status).map((task) => <TaskCard key={task.id} task={task} onCycle={() => onCycle(task.id)} onContinue={() => onContinue(task)} onDragStart={() => setDraggingTaskId(task.id)} onDragEnd={() => { setDraggingTaskId(null); setDropStatus(null); }} />)}</div>{status === "suggested" && <button onClick={onAdd} className="mt-3 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-[var(--line)] py-2 text-[10px] font-bold text-moss/65 hover:bg-white"><Plus size={12} /> Add task</button>}</div>)}</div></div>;
+
 }
 
-function TaskCard({ task, onCycle, onContinue }: { task: Task; onCycle: () => void; onContinue: () => void }) {
-  return <div className="rounded-2xl border border-[var(--line)] bg-white p-3 shadow-sm"><div className="flex items-start gap-2"><button onClick={onCycle} className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${task.status === "done" ? "border-[#75aa80] bg-[#75aa80] text-white" : "border-moss/35 text-transparent hover:border-moss"}`}>{task.status === "done" ? <Check size={10} /> : <Circle size={8} fill="currentColor" />}</button><div className={`text-xs font-semibold leading-relaxed ${task.status === "done" ? "text-moss/45 line-through" : ""}`}>{task.title}</div></div><div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2 pl-6 text-[9px] text-moss/60"><span className="flex items-center gap-1">{task.source === "Dial capture" ? <Phone size={10} /> : <MessageCircle size={10} />}{task.source}</span>{task.due && <span className="flex items-center gap-1"><Clock3 size={10} />{task.due}</span>}</div><button onClick={onContinue} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#edf5e9] px-2 py-2 text-[10px] font-bold text-[#54845e] transition hover:bg-[#dcecd7]"><Sparkles size={12} /> Ask Re:Mind for prompt</button></div>;
+function TaskCard({ task, onCycle, onContinue, onDragStart, onDragEnd }: { task: Task; onCycle: () => void; onContinue: () => void; onDragStart: () => void; onDragEnd: () => void }) {
+  return <div draggable onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", String(task.id)); onDragStart(); }} onDragEnd={onDragEnd} className="cursor-grab rounded-2xl border border-[var(--line)] bg-white p-3 shadow-sm transition hover:shadow-md active:cursor-grabbing"><div className="flex items-start gap-2"><button onClick={onCycle} className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${task.status === "done" ? "border-[#75aa80] bg-[#75aa80] text-white" : "border-moss/35 text-transparent hover:border-moss"}`}>{task.status === "done" ? <Check size={10} /> : <Circle size={8} fill="currentColor" />}</button><div className={`text-xs font-semibold leading-relaxed ${task.status === "done" ? "text-moss/45 line-through" : ""}`}>{task.title}</div></div><div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-2 pl-6 text-[9px] text-moss/60"><span className="flex items-center gap-1">{task.source === "Dial capture" ? <Phone size={10} /> : <MessageCircle size={10} />}{task.source}</span>{task.due && <span className="flex items-center gap-1"><Clock3 size={10} />{task.due}</span>}</div><button onClick={onContinue} className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#edf5e9] px-2 py-2 text-[10px] font-bold text-[#54845e] transition hover:bg-[#dcecd7]"><Sparkles size={12} /> Ask Re:Mind for prompt</button></div>;
 }
 
 function AgentPromptModal({ task, prompt, suggestion, projects: projectOptions, selectedProjectId, error, loading, onChooseProject, onRegenerate, onClose, onCopy }: { task: Task; prompt: string; suggestion: AgentSuggestion | null; projects: ContextProjectOption[]; selectedProjectId: string; error: string; loading: boolean; onChooseProject: (id: string) => void; onRegenerate: () => void; onClose: () => void; onCopy: (prompt: string) => void }) {
