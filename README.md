@@ -1,52 +1,54 @@
 # Re:Mind
 
-Re:Mind is a local-first continuity workspace for work that gets scattered across AI conversations. It turns a project recap and its next action into a small, usable dashboard: **what was decided, what is active, and what to do next**.
+Re:Mind is a project-backed continuity system for work that gets scattered across AI conversations. It turns the decisions, sources, tasks, and next moves from agent work into a durable project record—so a person or agent can resume with confidence instead of reconstructing the past from transcripts.
 
-> This repository is a working product demo for the LifeMaxx / SpeedHacks 2026 concept. Its Context Hub currently uses seeded local project data; it is designed so a live context service can replace that fixture without changing the dashboard.
+> This repository is the local development implementation for the LifeMaxx / SpeedHacks 2026 concept. It runs the same product contracts locally today and is designed to connect to the durable, project-backed services that power the final product.
 
 ## The problem
 
-Conversations with coding agents often contain the important details of a project—decisions, blockers, unfinished tasks, and the exact point where work stopped. That context is hard to recover when starting a new session or handing the work to another agent. A task list alone loses the reasoning; a transcript alone does not make the next action clear.
+Conversations with coding agents contain the details that make work resumable: decisions, constraints, blockers, unfinished tasks, and the exact point where work stopped. Those details are typically trapped in separate sessions. Starting again means rereading transcripts, re-explaining intent, and risking duplicated or contradictory work. A task list loses the reasoning; a transcript does not make ownership and the next action clear.
 
 ## The solution
 
 Re:Mind combines the two views needed to resume work confidently:
 
-- **Context Hub** presents each project as a compact brief with its summary, decisions, sources, timeline, and recommended next action.
-- **Action Hub** turns that context into a local task board. Tasks can be captured manually, moved through their status, and handed to an agent with a tailored continuation prompt.
+- **Context Hub** presents the project record as a compact, source-linked brief: summary, decisions, timeline, active context, and recommended next action.
+- **Action Hub** turns that context into an execution system. Tasks can be captured, assigned a clear state, and handed to an agent with a tailored continuation prompt.
 - **Dial Context MCP** is an optional voice-facing interface for reading project context and creating or updating tasks after explicit confirmation.
 
-The goal is not to claim that an agent automatically knows every past conversation. Instead, Re:Mind gives downstream agents a bounded, portable context package and makes the handoff visible to the person doing the work.
+The result is a reliable handoff layer: every continuation receives the bounded context it needs, while people retain a clear, inspectable view of the work record. Re:Mind does not ask an agent to guess at history; it supplies the relevant, attributable project state.
 
-## How it works today
+## Product architecture
 
 ```text
-Context source (fixture now, service later)
-                 |
-                 v
-        Context Hub project brief
-                 |
-                 +----------------------------+
-                 |                            |
-                 v                            v
-        Action Hub task board          Codex continuation prompt
-        (.remind/state.json)           (read-only, ephemeral CLI run)
-                 ^
-                 |
-     Optional Dial Context MCP tools
+Agent sessions, work sources, and user updates
+                       |
+                       v
+        Project-backed continuity record
+  (context, decisions, sources, tasks, and state)
+                       |
+          +------------+------------+
+          |                         |
+          v                         v
+  Context Hub and Action Hub   Agent-ready handoff
+          ^                         |
+          |                         v
+  Optional Dial Context MCP   Read-only Codex prompt generation
 ```
 
-### 1. Context arrives through one replaceable endpoint
+### 1. A project-backed context record
 
-The dashboard starts with the local project fixture in `lib/workspace.ts`. The server also exposes that same shape at `GET /api/context-hub`. To connect a real context system, set `CONTEXT_HUB_API_URL` to a compatible project endpoint; the handoff route will use it instead of the fixture.
+In the final product, Re:Mind maintains a durable project record that links the work's context, decisions, sources, action items, and current state. That record is the continuity layer between agents: it lets a new session understand what matters, why it matters, and what outcome is expected without relying on recollection or an unbounded conversation dump.
 
-Each project supplies the information the UI needs: a name, short summary, decisions, next action, sources, timeline, and last-updated time. This keeps the front end independent of where the context was collected.
+The dashboard consumes a stable project contract: name, short summary, decisions, next action, sources, timeline, and last-updated time. This separation lets Re:Mind add or change context providers without rewriting the product experience.
 
-### 2. Tasks stay local and actionable
+For local development, this repository serves that contract from `lib/workspace.ts` through `GET /api/context-hub`. Set `CONTEXT_HUB_API_URL` to a compatible project service when the shared context backend is available; the handoff route will use it automatically.
 
-The Action Hub reads and writes tasks through `/api/tasks`. Its local store persists to `.remind/state.json` using serialized, atomic writes, so captured tasks survive a page refresh. The dashboard polls for changes every three seconds and supports manual capture, status changes, and drag-and-drop updates.
+### 2. A durable action system
 
-This file-backed store is intentionally for one local process. A deployed, multi-user version should replace it with a shared data store.
+In production, Action Hub is backed by the same shared project record. Each task has a project, source, lifecycle state, and clear next move, so it can move safely between a person, an agent, and an optional voice interaction. This closes the gap between understanding the work and actually moving it forward.
+
+The local implementation reads and writes tasks through `/api/tasks` and persists them to `.remind/state.json` with serialized, atomic writes. That gives the demo real task capture, status changes, drag-and-drop updates, and persistence across page refreshes. The final multi-user deployment replaces this local development store with a shared project-backed database.
 
 ### 3. Handoffs are generated from bounded context
 
@@ -119,9 +121,12 @@ npm run lint
 npm run build
 ```
 
-## Current boundaries
+## Local development scope and production path
 
-- The shipped Context Hub data is a local demonstration fixture, not automatic retrieval from every coding-agent conversation.
-- Agent prompt generation requires the local Codex CLI and only sees the explicit task and context supplied to it.
-- Task persistence is a local JSON file for a single process.
-- Dial is optional and is guarded for demo use; production identity, storage, auditing, and consent requirements need a stronger implementation.
+This repository is intentionally self-contained so the complete product flow can be run and demonstrated on one machine. Its local Context Hub implementation supplies the same project contract the shared context service will provide, and its local task store exercises the same Action Hub workflow the shared project-backed database will own.
+
+- The local Context Hub data is a development dataset, not a claim of automatic retrieval from every coding-agent conversation.
+- A production context service will populate the project record from approved sources and retain source attribution, decisions, and state over time.
+- A production action store will replace the single-process JSON file with shared persistence, access controls, auditing, and collaboration semantics.
+- Agent prompt generation already uses only the explicit task and project context supplied to it; the local Codex CLI is required for this development flow.
+- Dial remains optional. Its demo protections are appropriate for a local prototype; production voice access requires stronger identity, consent, and policy enforcement.
